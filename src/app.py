@@ -15,15 +15,24 @@ import pandas as pd
 from boto3.dynamodb.conditions import Key
 import urllib.parse
 
+aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
+aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+region_name = 'ap-southeast-1'
+
+dynamodb = boto3.resource('dynamodb',
+                          aws_access_key_id=aws_access_key_id,
+                          aws_secret_access_key=aws_secret_access_key,
+                          region_name=region_name)
+s3_client = boto3.client('s3',
+                         aws_access_key_id=aws_access_key_id,
+                         aws_secret_access_key=aws_secret_access_key,
+                         region_name=region_name)
 
 # Initialize Roboflow model
 rf = Roboflow(api_key="4mk8lPHkiCrauugzg3jb")
 project = rf.workspace().project("ml2-wcn-ukm")
 model = project.version(16).model
 
-dynamodb = boto3.resource('dynamodb',
-    region_name='ap-southeast-1'
-)
 aggregate_table = dynamodb.Table('AggregateData')
 records_table = dynamodb.Table('Records')
 
@@ -99,7 +108,7 @@ def upload_to_s3(image_bytes_io, bucket, s3_file):
 
     try:
         # Use 'upload_fileobj' method to upload an in-memory file-like object
-        s3.upload_fileobj(image_bytes_io, bucket, s3_file)
+        s3.client.upload_fileobj(image_bytes_io, bucket, s3_file)
         print("Upload Successful")
         return True
 
