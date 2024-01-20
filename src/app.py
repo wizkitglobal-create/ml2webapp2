@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from boto3.dynamodb.conditions import Key
 import urllib.parse
+import os
 
 aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
