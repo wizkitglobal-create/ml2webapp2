@@ -71,15 +71,6 @@ def convert_image_to_np_array(contents, resize_factor=0.60):
 def resize_image(image, resize_factor=0.60):
     new_size = (int(image.size[0] * resize_factor), int(image.size[1] * resize_factor))
     return image.resize(new_size, Image.ANTIALIAS)
-def convert_image_to_np_array(contents, resize_factor=0.60):
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    image = Image.open(io.BytesIO(decoded))
-
-    # Resize image
-    image = resize_image(image, resize_factor)
-
-    return np.array(image)
 
 
 def decimal_coords(coords, ref):
@@ -105,20 +96,18 @@ def get_image_coordinates(image_bytes):
         return None, None
 
 def upload_to_s3(image_bytes_io, bucket, s3_file):
-    s3 = boto3.client('s3', region_name='ap-southeast-1')
-
     try:
-        # Use 'upload_fileobj' method to upload an in-memory file-like object
-        s3.client.upload_fileobj(image_bytes_io, bucket, s3_file)
+        # Use the globally initialized s3_client for the upload
+        s3_client.upload_fileobj(image_bytes_io, bucket, s3_file)
         print("Upload Successful")
         return True
-
     except NoCredentialsError:
         print("Credentials not available")
         return False
     except Exception as e:
-        print("An unexpected error occurred:", e)  # added this line to catch all other exceptions
+        print(f"An unexpected error occurred: {e}")
         return False
+
 
 
 
@@ -463,41 +452,7 @@ def update_bubble_map(_):
     return bubble_map
 
 
-@app.callback(
-    Output('download-link', 'href'),
-    [Input('download-button', 'n_clicks')],
-    [State('date-picker-range', 'start_date'),
-     State('date-picker-range', 'end_date')]
-)
-def generate_csv(n_clicks, start_date, end_date):
-    if n_clicks is None:
-        raise dash.exceptions.PreventUpdate
 
-    # Convert dates to match the format in DynamoDB
-    start_date_str = datetime.strptime(start_date, '%Y-%m-%d').isoformat()
-    end_date_str = datetime.strptime(end_date, '%Y-%m-%d').isoformat()
-
-    # Query DynamoDB
-    response = records_table.scan(
-        FilterExpression=Key('datetime').between(start_date_str, end_date_str)
-    )
-    items = response['Items']
-
-    # Convert to pandas DataFrame
-    try:
-        df = pd.DataFrame(items)
-    except ValueError as e:
-        print("Error creating DataFrame:", e)
-        # Handle the error appropriately (e.g., return an empty href or a message)
-        return ''
-
-    # Convert DataFrame to CSV string
-    csv_string_io = io.StringIO()
-    df.to_csv(csv_string_io, index=False, encoding='utf-8')
-    csv_string = "data:text/csv;charset=utf-8," + urllib.parse.quote(csv_string_io.getvalue())
-    print("CSV string created:", csv_string)  # Debug print
-
-    return csv_string
 
 
 if __name__ == "__main__":
