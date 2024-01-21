@@ -126,7 +126,7 @@ def parse_contents(contents, prediction, resize_factor=0.60):
 
     # Prepare to draw on the resized image
     draw = ImageDraw.Draw(resized_image)
-    font = ImageFont.truetype("arial.ttf", 10)
+    font = ImageFont.load_default()
 
     for obj in prediction['predictions']:
         # Adjust bounding box coordinates for resized image
