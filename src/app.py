@@ -1,20 +1,18 @@
-import dash
-from dash import dcc, html, dash_table, Input, Output, State
-import dash_bootstrap_components as dbc
-import plotly.graph_objs as go
 import base64
+import csv
 import io
-from roboflow import Roboflow
-from datetime import datetime, date, timedelta
+from datetime import datetime
+
 import boto3
-from botocore.exceptions import NoCredentialsError
-from PIL import Image, ImageDraw, ImageFont
-from exif import Image as ExifImage
+import dash
+import dash_bootstrap_components as dbc
 import numpy as np
-import pandas as pd
-from boto3.dynamodb.conditions import Key
-import urllib.parse
-import os
+import plotly.graph_objs as go
+from PIL import Image, ImageDraw, ImageFont
+from botocore.exceptions import NoCredentialsError
+from dash import dcc, html, Input, Output, State
+from exif import Image as ExifImage
+from roboflow import Roboflow
 
 aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
@@ -37,10 +35,12 @@ model = project.version(16).model
 aggregate_table = dynamodb.Table('AggregateData')
 records_table = dynamodb.Table('Records')
 
-app= dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG], suppress_callback_exceptions=True)
+app= dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY], suppress_callback_exceptions=True)
 server=app.server
 
+
 from PIL import ImageOps
+#
 
 def apply_exif_orientation(image):
     try:
@@ -127,6 +127,7 @@ def parse_contents(contents, prediction, resize_factor=0.60):
     # Prepare to draw on the resized image
     draw = ImageDraw.Draw(resized_image)
     font = ImageFont.load_default()
+    badges = []  # This will hold our badge components
 
     for obj in prediction['predictions']:
         # Adjust bounding box coordinates for resized image
@@ -140,6 +141,7 @@ def parse_contents(contents, prediction, resize_factor=0.60):
         draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
         draw.rectangle([x1, y1 - text_height - 4, x1 + text_width + 4, y1], fill="red")
         draw.text((x1 + 2, y1 - text_height - 2), label, fill="white", font=font)
+        badges.append(dbc.Badge(label, color="success", className="mr-1"))
 
     # Convert resized image to base64 for displaying
     buffered = io.BytesIO()
@@ -147,7 +149,7 @@ def parse_contents(contents, prediction, resize_factor=0.60):
     encoded_image = base64.b64encode(buffered.getvalue()).decode()
     src = f"data:image/jpeg;base64,{encoded_image}"
 
-    return html.Img(src=src, style={'maxWidth': '100%', 'height': 'auto'})
+    return html.Img(src=src, style={'maxWidth': '100%', 'height': 'auto'}), badges
 
 def get_initial_aggregate_data():
     response = aggregate_table.scan()
@@ -177,6 +179,8 @@ def upload_to_dynamodb(counter, lon, lat, classes_string):
         print("Couldn't upload data to DynamoDB: ", e)
         return False
 
+
+
 upload_card = dbc.Card(
     [
         dbc.CardBody(
@@ -199,12 +203,16 @@ upload_card = dbc.Card(
                         'margin': '10px'
                     },
                 ),
-                html.Div(id='output-image-upload')
+                dcc.Loading(
+                    id="loading",
+                    type="cube",
+                    children=html.Div(id='output-image-upload')
+                ),
+                html.Div(id='output-badges')  # This div will contain the badges
             ]
         ),
     ], style={'margin': '10px'}
 )
-
 bar_chart_card = dbc.Card(
     [
         dbc.CardBody(
@@ -227,19 +235,7 @@ bubble_map_card = dbc.Card(
     ], style={'margin': '10px'}
 )
 
-date_picker = dcc.DatePickerRange(
-    id='date-picker-range',
-    start_date=date.today() - timedelta(days=7),
-    end_date=date.today()
-)
-download_button = html.Button('Download CSV', id='download-button')
-download_link = html.A(
-    id='download-link',
-    children="Download CSV",  # This text won't be visible but is useful for accessibility
-    href='',  # This will be updated dynamically
-    download='data.csv',  # Suggested filename for the download
-    style={'display': 'none'}  # Hide the link
-)
+
 
 app.layout = html.Div(
     [
@@ -250,6 +246,16 @@ app.layout = html.Div(
                  dbc.Col(bar_chart_card, width=12, md=6, style={"padding": "10px"})]),
         dbc.Row([dbc.Col(bubble_map_card, width=12, md=12, style={"padding": "10px"}),
                  ]),
+        dcc.DatePickerRange(
+            id="date-range",
+            start_date=datetime.today().date(),  # default to one week ago
+            end_date=datetime.today().date(),  # default to today
+            display_format="YYYY-MM-DD",
+            style={"padding": "10px"}
+        ),
+        dbc.Button("Download Data", id='download-button', color="warning", className="me-1"),        dcc.Download(id="download-component"),
+
+
         dcc.Interval(
             id='interval-component',
             interval=5 * 1000,  # in milliseconds
@@ -284,8 +290,58 @@ def fetch_coordinates_and_classes():
             data.append((lon, lat, classes))
     return data
 
+
+@app.callback(
+    Output("download-component", "data"),
+    [
+        Input("download-button", "n_clicks"),
+        Input("date-range", "start_date"),
+        Input("date-range", "end_date")
+    ],
+    prevent_initial_call=True,
+)
+def generate_csv(n_clicks, start_date, end_date):
+    if not n_clicks:
+        # No clicks yet
+        raise dash.exceptions.PreventUpdate
+
+    # Parse start and end dates from strings to date objects
+    start_date = datetime.strptime(start_date, "%Y-%m-%d")
+    end_date = datetime.strptime(end_date, "%Y-%m-%d")
+
+    # Retrieve data from the DynamoDB
+    response = records_table.scan()
+
+    data = []
+
+    # Filter results
+    for item in response['Items']:
+        entry_date = datetime.fromisoformat(item['datetime'])
+        if start_date <= entry_date <= end_date:
+            data.append(item)
+
+    # Check if there is any data
+    if not data:
+        # No data in the table
+        return None
+
+    # DynamoDB column names
+    fieldnames = data[0].keys()
+
+    # StringIO object for storing CSV data
+    csv_str_io = io.StringIO()
+    writer = csv.DictWriter(csv_str_io, fieldnames=fieldnames)
+
+    writer.writeheader()
+    writer.writerows(data)
+
+    csv_data = csv_str_io.getvalue()
+    return dcc.send_string(csv_data, "dynamo_records.csv", mimetype="text/csv")
+
+
 @app.callback(
     Output('output-image-upload', 'children'),
+    Output('output-badges', 'children'),  # Add this line
     Output('inference-graph', 'figure'),
     Output('aggregate-data', 'data'),
     Input('upload-image', 'contents'),
@@ -313,7 +369,7 @@ def update_output(contents, aggregate_data):
     image_array = convert_image_to_np_array(contents)
 
     prediction = model.predict(image_array, confidence=10, overlap=30).json()
-    children = parse_contents(contents, prediction)
+    children, badges = parse_contents(contents, prediction)
 
     if aggregate_data is None:
         aggregate_data = {}
@@ -394,7 +450,7 @@ def update_output(contents, aggregate_data):
 
     store_aggregate_data_in_dynamodb(aggregate_data)
 
-    return children, bar_graph, aggregate_data
+    return children, badges, bar_graph, aggregate_data
 
 @app.callback(
     Output('bubble-map', 'figure'),
@@ -416,9 +472,9 @@ def update_bubble_map(_):
             zoom = 10  # set a maximum limit for zoom level
     else:
         # default values for init or if no coordinates available
-        center_lat = 0
-        center_lon = 0
-        zoom = 1
+        center_lat = 4.2105
+        center_lon = 101.9758
+        zoom = 5
 
     bubble_map = go.Figure(
         data=go.Scattermapbox(
@@ -438,10 +494,10 @@ def update_bubble_map(_):
 
     bubble_map.update_layout(
         mapbox=dict(
-            accesstoken='pk.eyJ1Ijoid2NuLW1sMiIsImEiOiJjbHJscXEwd3Mwb3R5MnFrNGppamN5end1In0.h-v-dm4qidmGX0G1kWHB-g',  # Replace 'Your_mapbox_token' with your actual Mapbox access token
-            center=dict(lat=center_lat, lon=center_lon),  # this line controls the center
-            zoom=zoom,  # this line controls zoom
-            style='mapbox://styles/wcn-ml2/clrlr2ibo003f01qy7m3gf163'  # Replace with your actual style URL
+            accesstoken='pk.eyJ1Ijoid2NuLW1sMiIsImEiOiJjbHJscXEwd3Mwb3R5MnFrNGppamN5end1In0.h-v-dm4qidmGX0G1kWHB-g',
+            center=dict(lat=4.2105, lon=101.9758),  # Coordinates of Malaysia
+            zoom=5,
+            style='mapbox://styles/wcn-ml2/clrlr2ibo003f01qy7m3gf163'
         ),
         autosize=True,
         hovermode='closest',
@@ -467,3 +523,6 @@ if __name__ == "__main__":
 #bounding box error fixed
 #want to update the map
 #map now working!
+
+#15/02/2024
+#map zoom, loading wheel, inferences badges, increased confidence threshold
