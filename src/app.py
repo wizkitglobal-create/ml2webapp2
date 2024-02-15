@@ -1,6 +1,7 @@
 import base64
 import csv
 import io
+import os
 from datetime import datetime
 
 import boto3
@@ -13,6 +14,7 @@ from botocore.exceptions import NoCredentialsError
 from dash import dcc, html, Input, Output, State
 from exif import Image as ExifImage
 from roboflow import Roboflow
+import os
 
 aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
 aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
